@@ -1,3 +1,5 @@
+import os
+
 import typer
 
 from mcp_email_server.app import mcp
@@ -19,6 +21,16 @@ def sse(
     mcp.settings.host = host
     mcp.settings.port = port
     mcp.run(transport="sse")
+
+
+@app.command()
+def streamable_http(
+    host: str = os.environ.get("MCP_HOST", "localhost"),
+    port: int = os.environ.get("MCP_PORT", 9557),
+):
+    mcp.settings.host = host
+    mcp.settings.port = port
+    mcp.run(transport="streamable-http")
 
 
 @app.command()
