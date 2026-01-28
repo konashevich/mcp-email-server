@@ -173,6 +173,7 @@ class EmailClient:
         text: str | None = None,
         from_address: str | None = None,
         to_address: str | None = None,
+        unread_only: bool = False,
     ):
         search_criteria = []
         if before:
@@ -189,6 +190,8 @@ class EmailClient:
             search_criteria.extend(["FROM", from_address])
         if to_address:
             search_criteria.extend(["TO", to_address])
+        if unread_only:
+            search_criteria.append("UNSEEN")
 
         # If no specific criteria, search for ALL
         if not search_criteria:
@@ -203,6 +206,7 @@ class EmailClient:
         subject: str | None = None,
         from_address: str | None = None,
         to_address: str | None = None,
+        unread_only: bool = False,
         mailbox: str = "INBOX",
     ) -> int:
         imap = self.imap_class(self.email_server.host, self.email_server.port)
@@ -215,7 +219,7 @@ class EmailClient:
             await imap.login(self.email_server.user_name, self.email_server.password)
             await imap.select(_quote_mailbox(mailbox))
             search_criteria = self._build_search_criteria(
-                before, since, subject, from_address=from_address, to_address=to_address
+                before, since, subject, from_address=from_address, to_address=to_address, unread_only=unread_only
             )
             logger.info(f"Count: Search criteria: {search_criteria}")
             # Search for messages and count them - use UID SEARCH for consistency
@@ -237,6 +241,7 @@ class EmailClient:
         subject: str | None = None,
         from_address: str | None = None,
         to_address: str | None = None,
+        unread_only: bool = False,
         order: str = "desc",
         mailbox: str = "INBOX",
     ) -> AsyncGenerator[dict[str, Any], None]:
@@ -252,7 +257,7 @@ class EmailClient:
             await imap.select(_quote_mailbox(mailbox))
 
             search_criteria = self._build_search_criteria(
-                before, since, subject, from_address=from_address, to_address=to_address
+                before, since, subject, from_address=from_address, to_address=to_address, unread_only=unread_only
             )
             logger.info(f"Get metadata: Search criteria: {search_criteria}")
 
@@ -278,25 +283,45 @@ class EmailClient:
                     # Convert email_id from bytes to string
                     email_id_str = email_id.decode("utf-8")
 
-                    # Fetch only headers to get metadata without body
-                    _, data = await imap.uid("fetch", email_id_str, "BODY.PEEK[HEADER]")
+                    # Fetch headers and flags
+                    _, data = await imap.uid("fetch", email_id_str, "(BODY.PEEK[HEADER] FLAGS)")
 
                     if not data:
                         logger.error(f"Failed to fetch headers for UID {email_id_str}")
                         continue
 
-                    # Find the email headers in the response
+                    # Parse response to get headers and flags
                     raw_headers = None
-                    if len(data) > 1 and isinstance(data[1], bytearray):
-                        raw_headers = bytes(data[1])
-                    else:
-                        # Search through all items for header content
-                        for item in data:
-                            if isinstance(item, bytes | bytearray) and len(item) > 10:
-                                # Skip IMAP protocol responses
-                                if isinstance(item, bytes) and b"FETCH" in item:
+                    is_read = False
+
+                    # Iterate through parts to find headers and flags
+                    for item in data:
+                        if isinstance(item, bytes | bytearray):
+                            # Check for flags in the response line (e.g., b'1 (UID 1 FLAGS (\Seen) ...')
+                            # Note: item might be the literal header block too, so we need to be careful
+                            if len(item) < 1000 and b"FLAGS" in bytes(item).upper():
+                                if b"\\Seen" in bytes(item) or b"\\SEEN" in bytes(item):
+                                    is_read = True
+
+                            # Check for header block
+                            # In fetch response with parens, the literal might be distinct or part of a tuple
+                            pass  # Logic handled below
+
+                    # Specific handling for aioimaplib response structure with parens
+                    # data often looks like [b'SEQ (UID ... FLAGS (...) BODY[...] {LEN}', b'Header Content', b')']
+                    # regex or structural parsing is better, but simple iteration works for now if we identify the header blob
+                    
+                    for item in data:
+                         if isinstance(item, bytes | bytearray) and len(item) > 10:
+                                # Skip IMAP protocol responses (start/end)
+                                if isinstance(item, bytes) and (b"FETCH" in item or item == b")"):
+                                    # But check for flags here too just in case
+                                    if b"FLAGS" in item.upper():
+                                        if b"\\Seen" in item or b"\\SEEN" in item:
+                                            is_read = True
                                     continue
-                                # This is likely the header content
+                                
+                                # This is likely the header content (large block)
                                 raw_headers = bytes(item) if isinstance(item, bytearray) else item
                                 break
 
@@ -340,6 +365,7 @@ class EmailClient:
                                 "from": sender,
                                 "to": to_addresses,
                                 "date": date,
+                                "is_read": is_read,
                                 "attachments": [],  # We don't fetch attachment info for metadata
                             }
                             yield metadata
@@ -769,16 +795,17 @@ class ClassicEmailHandler(EmailHandler):
         subject: str | None = None,
         from_address: str | None = None,
         to_address: str | None = None,
+        unread_only: bool = False,
         order: str = "desc",
         mailbox: str = "INBOX",
     ) -> EmailMetadataPageResponse:
         emails = []
         async for email_data in self.incoming_client.get_emails_metadata_stream(
-            page, page_size, before, since, subject, from_address, to_address, order, mailbox
+            page, page_size, before, since, subject, from_address, to_address, order, mailbox, unread_only=unread_only
         ):
             emails.append(EmailMetadata.from_email(email_data))
         total = await self.incoming_client.get_email_count(
-            before, since, subject, from_address=from_address, to_address=to_address, mailbox=mailbox
+            before, since, subject, from_address=from_address, to_address=to_address, mailbox=mailbox, unread_only=unread_only
         )
         return EmailMetadataPageResponse(
             page=page,

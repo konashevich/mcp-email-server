@@ -69,6 +69,9 @@ async def list_emails_metadata(
         Field(default=None, description="Order emails by field. `asc` or `desc`."),
     ] = "desc",
     mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to retrieve emails from.")] = "INBOX",
+    unread_only: Annotated[
+        bool, Field(default=False, description="Filter for unread emails only.")
+    ] = False,
 ) -> EmailMetadataPageResponse:
     handler = dispatch_handler(account_name)
 
@@ -82,6 +85,7 @@ async def list_emails_metadata(
         to_address=to_address,
         order=order,
         mailbox=mailbox,
+        unread_only=unread_only,
     )
 
 

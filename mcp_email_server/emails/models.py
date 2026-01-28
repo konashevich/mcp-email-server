@@ -13,6 +13,7 @@ class EmailMetadata(BaseModel):
     sender: str
     recipients: list[str]  # Recipient list
     date: datetime
+    is_read: bool = False
     attachments: list[str]
 
     @classmethod
@@ -24,6 +25,7 @@ class EmailMetadata(BaseModel):
             sender=email["from"],
             recipients=email.get("to", []),
             date=email["date"],
+            is_read=email.get("is_read", False),
             attachments=email["attachments"],
         )
 
